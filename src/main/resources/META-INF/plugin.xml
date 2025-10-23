@@ -24,6 +24,9 @@
     <!-- Extension points defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
-
+        <toolWindowFactory
+                id="Smith"
+                anchor="right"
+                factoryClass="com.agents.smith.toolwindow.SmithToolWindowFactory"/>
     </extensions>
 </idea-plugin>
