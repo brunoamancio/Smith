@@ -5,10 +5,12 @@ import com.agents.smith.viewmodel.SmithViewModel
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.ui.DocumentAdapter
+import com.intellij.ui.JBColor
 import com.intellij.ui.JBSplitter
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBLabel
@@ -31,17 +33,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Font
+import java.awt.KeyboardFocusManager
 import java.awt.event.ActionEvent
+import java.awt.event.FocusAdapter
+import java.awt.event.FocusEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
 import javax.swing.AbstractAction
+import javax.swing.DefaultListModel
+import javax.swing.Icon
+import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JList
-import javax.swing.DefaultListModel
-import javax.swing.JButton
+import javax.swing.JPopupMenu
+import javax.swing.JToggleButton
 import javax.swing.KeyStroke
 import javax.swing.ListCellRenderer
 import javax.swing.ListSelectionModel
+import javax.swing.JMenuItem
+import javax.swing.SwingConstants
 
 class SmithToolWindowPanel(private val project: Project) :
     JBPanel<SmithToolWindowPanel>(BorderLayout()),
@@ -54,18 +65,12 @@ class SmithToolWindowPanel(private val project: Project) :
     private val chatModel = DefaultListModel<SmithState.Message>()
     private val chatList = JBList(chatModel)
     private val promptEditor = JBTextArea(4, 0)
-    private val sendButton = JButton("Send")
-    private val insertButton = JButton("Insert").apply {
-        isEnabled = false
-        toolTipText = "Insert is disabled until Smith connects to a backend."
-    }
-    private val explainButton = JButton("Explain").apply {
-        isEnabled = false
-        toolTipText = "Explain is disabled until Smith connects to a backend."
-    }
-    private val patchButton = JButton("Apply Patch").apply {
-        isEnabled = false
-        toolTipText = "Patch preview is disabled until Smith connects to a backend."
+    private val sendButton = JButton(AllIcons.Actions.Forward).apply {
+        text = ""
+        putClientProperty("JButton.buttonType", "roundRect")
+        border = JBUI.Borders.empty(6)
+        isFocusPainted = false
+        toolTipText = "Send (Ctrl+Enter)"
     }
 
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
@@ -149,22 +154,208 @@ class SmithToolWindowPanel(private val project: Project) :
         promptEditor.lineWrap = true
         promptEditor.wrapStyleWord = true
         promptEditor.toolTipText = "Describe what you need help with. Press Ctrl+Enter to send."
-        promptEditor.margin = JBUI.insets(8)
+        promptEditor.emptyText.text = "Type your task here, press Ctrl+Enter"
+        promptEditor.margin = JBUI.insets(0)
+        promptEditor.border = JBUI.Borders.empty()
+        promptEditor.background = JBColor(0x1F1F24, 0x2B2D30)
 
-        val promptContainer = JBPanel<JBPanel<*>>(BorderLayout(8, 0)).apply {
-            add(JBScrollPane(promptEditor), BorderLayout.CENTER)
-            add(buildPromptButtons(), BorderLayout.EAST)
+        val scrollPane = JBScrollPane(promptEditor).apply {
+            border = null
+            isOpaque = false
+            viewport.isOpaque = false
+            viewport.background = promptEditor.background
         }
 
-        return promptContainer
+        val promptCard = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            isOpaque = true
+            background = promptEditor.background
+        }
+
+        val focusColor = JBColor(0x3D7DFF, 0x3D7DFF)
+        val idleColor = JBColor(0x3A3F4B, 0x3A3F4B)
+
+        fun applyBorder(focused: Boolean) {
+            val color = if (focused) focusColor else idleColor
+            val thickness = if (focused) 2 else 1
+            promptCard.border = JBUI.Borders.merge(
+                JBUI.Borders.customLine(color, thickness),
+                JBUI.Borders.empty(12),
+                true
+            )
+        }
+
+        applyBorder(false)
+
+        val focusListener = object : FocusAdapter() {
+            override fun focusGained(e: FocusEvent?) = applyBorder(true)
+
+            override fun focusLost(e: FocusEvent?) {
+                val focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+                val hasFocusInside = focusOwner != null && promptCard.isAncestorOf(focusOwner)
+                applyBorder(hasFocusInside)
+            }
+        }
+
+        val actionsRow = createPromptActionsRow(focusListener)
+
+        promptCard.add(scrollPane, BorderLayout.CENTER)
+        promptCard.add(actionsRow, BorderLayout.SOUTH)
+
+        promptEditor.addFocusListener(focusListener)
+
+        return promptCard
     }
 
-    private fun buildPromptButtons(): JComponent {
-        return JBPanel<JBPanel<*>>(VerticalLayout(8)).apply {
-            add(sendButton)
-            add(insertButton)
-            add(explainButton)
-            add(patchButton)
+    private fun createPromptActionsRow(focusListener: FocusAdapter): JComponent {
+        val plusButton = createToolbarIconButton(AllIcons.General.Add, "More actions").apply {
+            addActionListener { showPromptActionsMenu(this) }
+        }
+
+        val modeOptions = arrayOf(
+            ModeOption("Code", "Delegate coding task"),
+            ModeOption("Ask", "Ask Junie anything")
+        )
+
+        val modeSelector = ComboBox(modeOptions).apply {
+            renderer = ModeOptionRenderer()
+            selectedIndex = 0
+            isOpaque = false
+            border = JBUI.Borders.empty()
+            putClientProperty("JComponent.sizeVariant", "small")
+            maximumRowCount = modeOptions.size
+        }
+
+        val braveToggle = createToolbarToggle("Brave Mode", null)
+        val thinkMoreToggle = createToolbarToggle("Think More", null)
+
+        val leftGroup = JBPanel<JBPanel<*>>(HorizontalLayout(12)).apply {
+            isOpaque = false
+            add(plusButton)
+            add(modeSelector)
+            add(braveToggle)
+            add(thinkMoreToggle)
+        }
+
+        sendButton.preferredSize = JBUI.size(36, 36)
+        sendButton.minimumSize = sendButton.preferredSize
+
+        val sendWrapper = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            isOpaque = false
+            add(sendButton, BorderLayout.CENTER)
+        }
+
+        val actionsRow = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            isOpaque = false
+            border = JBUI.Borders.empty(8, 12, 12, 12)
+            add(leftGroup, BorderLayout.WEST)
+            add(sendWrapper, BorderLayout.EAST)
+        }
+
+        listOf<Component>(plusButton, modeSelector, braveToggle, thinkMoreToggle, sendButton).forEach {
+            it.addFocusListener(focusListener)
+        }
+
+        return actionsRow
+    }
+
+    private fun createToolbarToggle(text: String, icon: Icon?): JToggleButton {
+        return JToggleButton(text).apply {
+            this.icon = icon
+            horizontalAlignment = SwingConstants.LEFT
+            iconTextGap = 6
+            isContentAreaFilled = false
+            isOpaque = false
+            border = JBUI.Borders.empty(4, 8)
+            putClientProperty("JButton.buttonType", "toolbar")
+            isFocusPainted = false
+        }
+    }
+
+    private fun createToolbarIconButton(icon: Icon, tooltip: String): JButton {
+        return JButton(icon).apply {
+            toolTipText = tooltip
+            isContentAreaFilled = false
+            isOpaque = false
+            isFocusPainted = false
+            border = JBUI.Borders.empty(4, 8)
+            putClientProperty("JButton.buttonType", "toolbar")
+        }
+    }
+
+    private fun showPromptActionsMenu(invoker: Component) {
+        val menu = JPopupMenu().apply {
+            add(createMenuItem("Project File/Image...") { handleProjectFileAction() })
+            add(createMenuItem("Create project guidelines") { handleCreateGuidelines() })
+            add(createMenuItem("Create AI ignore file") { handleCreateIgnoreFile() })
+        }
+
+        menu.show(invoker, 0, invoker.height)
+    }
+
+    private fun createMenuItem(text: String, onClick: () -> Unit): JMenuItem {
+        return JMenuItem(text).apply {
+            addActionListener { onClick() }
+        }
+    }
+
+    private fun handleProjectFileAction() {
+        Messages.showInfoMessage(
+            project,
+            "Project file and image uploads will be available soon.",
+            "Coming Soon"
+        )
+    }
+
+    private fun handleCreateGuidelines() {
+        Messages.showInfoMessage(
+            project,
+            "Guideline creation is not implemented yet.",
+            "Coming Soon"
+        )
+    }
+
+    private fun handleCreateIgnoreFile() {
+        Messages.showInfoMessage(
+            project,
+            "AI ignore file generation is not implemented yet.",
+            "Coming Soon"
+        )
+    }
+
+    private data class ModeOption(val label: String, val description: String)
+
+    private inner class ModeOptionRenderer : ListCellRenderer<ModeOption> {
+        override fun getListCellRendererComponent(
+            list: JList<out ModeOption>,
+            value: ModeOption?,
+            index: Int,
+            isSelected: Boolean,
+            cellHasFocus: Boolean
+        ): Component {
+            val option = value ?: return JBLabel()
+            if (index == -1) {
+                return JBLabel(option.label)
+            }
+
+            val titleLabel = JBLabel(option.label)
+            val descriptionLabel = JBLabel(option.description).apply {
+                font = font.deriveFont(font.size2D - 1f)
+                foreground = JBColor(0x8C8C8C, 0x9DA1A9)
+            }
+
+            return JBPanel<JBPanel<*>>(VerticalLayout(2)).apply {
+                border = JBEmptyBorder(6, 8, 6, 8)
+                isOpaque = true
+                background = if (isSelected) list.selectionBackground else list.background
+
+                titleLabel.foreground = if (isSelected) list.selectionForeground else list.foreground
+                if (isSelected) {
+                    descriptionLabel.foreground = list.selectionForeground
+                }
+
+                add(titleLabel)
+                add(descriptionLabel)
+            }
         }
     }
 
