@@ -41,5 +41,6 @@ bin/
 
 ### Mac OS ###
 .DS_Store
-/.intellijPlatform/coroutines-javaagent-legacy.jar
-/.intellijPlatform/self-update.lock
+
+
+**/.intellijPlatform/
