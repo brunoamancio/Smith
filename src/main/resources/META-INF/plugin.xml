@@ -21,12 +21,15 @@
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
     <depends>com.intellij.modules.platform</depends>
 
+    <icon>icons/Smith.svg</icon>
+
     <!-- Extension points defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow
                 id="Smith"
                 anchor="right"
-                factoryClass="com.agents.smith.toolwindow.SmithToolWindowFactory"/>
+                factoryClass="com.agents.smith.toolwindow.SmithToolWindowFactory"
+                icon="icons/Smith.svg"/>
     </extensions>
 </idea-plugin>
