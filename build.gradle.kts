@@ -20,7 +20,9 @@ dependencies {
     intellijPlatform {
         //create("IC", "2025.1.4.1")
         //create("RD", "2025.2.2.1");
-        local("C:/Program Files/JetBrains/JetBrains Rider 2025.2.2.1")
+        create("RD", "2025.2.2.1") { useInstaller = false }
+        //local("C:/Program Files/JetBrains/JetBrains Rider 2025.2.2.1")
+        //local("C:/Program Files/JetBrains/JetBrains Rider 2025.1.2")
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
 
         // Add necessary plugin dependencies for compilation here, example:
