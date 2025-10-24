@@ -61,9 +61,6 @@ class SmithToolWindowPanel(private val project: Project) :
     Disposable {
 
     private val promptBackground = JBColor(0x1F2023, 0x1F2023)
-    private val userBubbleColor = JBColor(0x26292F, 0x26292F)
-    private val agentBubbleColor = JBColor(0x21252B, 0x21252B)
-    private val columnHeaderColor = JBColor(0x8C919E, 0x8C919E)
     private val idleBorderColor = JBColor(0x3A3F4B, 0x3A3F4B)
 
     private val historyModel = DefaultListModel<String>()
@@ -181,7 +178,6 @@ class SmithToolWindowPanel(private val project: Project) :
 
         val conversationCell = createTableCell(
             conversationContent,
-            top = true,
             left = true,
             bottom = false,
             right = false,
@@ -190,7 +186,6 @@ class SmithToolWindowPanel(private val project: Project) :
 
         val tasksCell = createTableCell(
             buildTasksPane(),
-            top = true,
             left = false,
             bottom = false,
             right = true,
@@ -200,7 +195,6 @@ class SmithToolWindowPanel(private val project: Project) :
 
         val promptCell = createTableCell(
             buildPromptEditor(),
-            top = true,
             left = true,
             bottom = true,
             right = true,
@@ -394,7 +388,6 @@ class SmithToolWindowPanel(private val project: Project) :
 
     private fun createTableCell(
         content: JComponent,
-        top: Boolean,
         left: Boolean,
         bottom: Boolean,
         right: Boolean,
@@ -411,7 +404,7 @@ class SmithToolWindowPanel(private val project: Project) :
             background = promptBackground
             border = JBUI.Borders.customLine(
                 idleBorderColor,
-                if (top) 1 else 0,
+                1,
                 if (left) 1 else 0,
                 if (bottom) 1 else 0,
                 if (right) 1 else 0
@@ -421,7 +414,22 @@ class SmithToolWindowPanel(private val project: Project) :
     }
 
     private fun createPromptActionsRow(): JComponent {
-        val plusButton = createToolbarIconButton(AllIcons.General.Add, "More actions").apply {
+        val plusButton = JButton(AllIcons.General.Add).apply {
+            toolTipText = "More actions"
+            isContentAreaFilled = false
+            isOpaque = false
+            background = promptBackground
+            isFocusPainted = false
+            isRolloverEnabled = false
+            isFocusable = false
+            border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(idleBorderColor, 1),
+                JBUI.Borders.empty(2, 2, 2, 2)
+            )
+            preferredSize = JBUI.size(28, 28)
+            minimumSize = preferredSize
+            putClientProperty(CLIENT_PROPERTY_BUTTON_TYPE, BUTTON_TYPE_TOOLBAR)
+            putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
             addActionListener { showPromptActionsMenu(this) }
         }
 
@@ -479,26 +487,6 @@ class SmithToolWindowPanel(private val project: Project) :
                     this.text = if (isSelected) activeText else defaultText
                 }
             }
-        }
-    }
-
-    private fun createToolbarIconButton(icon: Icon, tooltip: String): JButton {
-        return JButton(icon).apply {
-            toolTipText = tooltip
-            isContentAreaFilled = false
-            isOpaque = false
-            background = promptBackground
-            isFocusPainted = false
-            isRolloverEnabled = false
-            isFocusable = false
-            border = JBUI.Borders.compound(
-                JBUI.Borders.customLine(idleBorderColor, 1),
-                JBUI.Borders.empty(2, 2, 2, 2)
-            )
-            preferredSize = JBUI.size(28, 28)
-            minimumSize = preferredSize
-            putClientProperty(CLIENT_PROPERTY_BUTTON_TYPE, BUTTON_TYPE_TOOLBAR)
-            putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
         }
     }
 
