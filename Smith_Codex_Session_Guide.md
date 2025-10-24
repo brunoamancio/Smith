@@ -1,189 +1,131 @@
-# Smith Project — Codex Session Initialization Guide
+# Smith Project - Codex Session Initialization Guide
 
-This file defines everything a new Codex session needs to know to collaborate on **Smith**, an IntelliJ IDEA plugin project (UI-only stage).
+This guide captures the state of the **Smith** IntelliJ Platform plugin as of the current workspace so a fresh Codex session can collaborate effectively.
 
 ---
 
 ## 1. Project Overview
-Smith is a project-scoped AI coding agent embedded in the IDE as a **Tool Window**. Initially, only the frontend/UI is implemented. A backend service (BE) will be integrated later.
+Smith is a JetBrains tool window plugin that delivers an AI assistant UI inside the IDE. The implementation focuses on UI and local state management; backend integration is not wired yet.
 
-- **IDE**: IntelliJ IDEA Community (2025+)
-- **JDK**: Oracle JDK 24
-- **Language**: Kotlin (JVM)
-- **Scope**: UI-only (no backend yet)
-- **Plugin ID**: `com.yourorg.smith`
-- **Version**: `0.1.0`
-- **Privacy mode**: `true` (no code upload without consent)
-
----
-
-## 2. Capabilities (UI-only phase)
-Allowed now:
-- Show conversational UI inside a Tool Window.
-- Send prepared requests to an external endpoint (no sensitive code unless user consents).
-- Read editor selection when the user explicitly requests context.
-- Preview generated code or patches before applying.
-
-Forbidden:
-- Sending full project contents automatically.
-- Writing or executing code without user confirmation.
-- Storing secrets insecurely.
+- **Gradle project**: `smith`
+- **Group / version**: `com.agents.smith` / `1.0-SNAPSHOT`
+- **Plugin ID**: `com.agents.smith.smith`
+- **Target IDE**: JetBrains Rider 2025.2.2.1 (via `intellijPlatform.create("RD", "2025.2.2.1")`)
+- **Tooling stack**: Kotlin 2.1.0, IntelliJ Platform Gradle Plugin 2.7.1, Java 21 bytecode
+- **JDK for development**: 21 or newer (Oracle JDK 21+ recommended)
+- **Current scope**: UI-only; SmithViewModel simulates responses
 
 ---
 
-## 3. Tool Window Layout
-- **Header**: Smith name + connection indicator.
-- **Main Area**: chat/message feed with streaming updates.
-- **Prompt Editor**: multi-line text box with context toggles.
-- **Buttons**: “Send”, “Insert”, “Explain”, “Apply Patch”.
-- **Settings Cog**: API key, endpoint, model, streaming toggle.
-- **History Pane**: collapsible previous sessions.
-
-UI updates must be **non-blocking** — background threads for work, Swing EDT for rendering.
+## 2. Build & Run Essentials
+- Use the bundled Gradle wrapper (`gradlew`, `gradlew.bat`).
+- Useful tasks:
+  - `./gradlew runIde` launches Rider with the plugin.
+  - `./gradlew buildPlugin` packages the artifact.
+- `gradle.properties` enables configuration and build caches and opts out of auto-bundling the Kotlin stdlib (`kotlin.stdlib.default.dependency=false`).
+- No external services or secrets are required to launch the UI; all remote calls are stubbed.
 
 ---
 
-## 4. Data Structures (JSON Schemas)
-
-**Init / settings**
-```json
-{
-  "client_id": "smith-kotlin-0.1",
-  "session_id": "uuid-v4",
-  "project": "MyProject",
-  "user": {"id": "local-user", "consent_for_context": false},
-  "settings": {"model": "gpt-4o-mini", "stream": true, "max_tokens": 1024}
-}
-```
-
-**Chat request**
-```json
-{
-  "session_id": "uuid-v4",
-  "messages": [
-    {"role": "system", "content": "You are Smith, an IDE assistant."},
-    {"role": "user", "content": "Refactor this method to X."}
-  ],
-  "context": {
-    "include_selection": true,
-    "selection_text": "public void foo() { ... }"
-  }
-}
-```
-
-**Streaming response frames**
-```json
-{"type": "delta", "content": "public void fooRefactored() {"}
-{"type": "delta", "content": " ..."} 
-{"type": "done"}
-```
-
-**Action result**
-```json
-{"action": "insert_patch", "editor_file": "src/Main.java", "patch": "@@ -1,6 +1,8 ...", "requires_confirmation": true}
-```
+## 3. Current Capabilities
+- The tool window loads a **Task overview** layout with:
+  - A conversation preview card (chat history list).
+  - A "Tasks" column that currently mirrors the active conversation.
+  - A prompt composer with Send and auxiliary toggles.
+- Pressing **Send** (or `Ctrl+Enter`) routes text to `SmithViewModel.sendUserMessage`. The view model appends the user message and emits a placeholder assistant reply after ~250 ms.
+- Conversations can switch between overview and focused chat using the back button in the header.
+- Toolbar toggles (`Auto context`, `Agent/Chat`, `Think More`) are UI-only; they flip icons and labels but do not alter behaviour yet.
+- The overflow menu (Add button) exposes three placeholder actions (project file/image upload, guideline creation, AI ignore file). Each shows a "Coming Soon" dialog.
+- A Settings gear in the header opens an informational dialog; persistent settings screens are not implemented.
 
 ---
 
-## 5. Consent & Security Rules
-Smith must **always** ask the user before sending code externally.
-
-Example consent prompt:
-> Smith wants to include the current file (7.2 KB) in a request to the AI. Allow?  
-> [Include Selection] [Include File] [Cancel]
-
-Store user choices in workspace config. Use IDE **Password Safe** for API keys.
-
----
-
-## 6. UX Flows
-1. **Quick Question** → send text-only prompt, stream response.
-2. **Contextual Assist** → ask user for consent → send selection context.
-3. **Apply Change** → show diff preview → confirm before write.
-4. **Explain Code** → display formatted explanation block.
-5. **Monitor (future)** → live-updating tool window (poll or event-driven).
+## 4. Tool Window Layout
+- **Header**: Back button (`AllIcons.Actions.Back`), dynamic title label, Settings gear.
+- **Body (overview mode)**: Grid-style layout produced by `buildMainTable()`:
+  - Left cell: conversation preview (history list rendered with custom borders).
+  - Right cell: tasks pane (`JBList` of `ConversationSummary` items).
+  - Bottom row: prompt editor cell spanning full width.
+- **Conversation mode**: Replaces the main layout with a full-height chat pane (`JBList<SmithState.Message>` inside a scroll pane) while keeping the prompt composer docked.
+- All panels share a dark theme palette (`JBColor(0x1F2023, 0x1F2023)`) and thin separator borders (`idleBorderColor`).
 
 ---
 
-## 7. Session State Model
+## 5. Interaction Flow
+1. `SmithState.initial()` seeds the state with a system welcome message.
+2. Text entry in the prompt enables the Send button; clearing it disables the button.
+3. Send action:
+   - Clears the editor, disables Send, forwards the text to the view model.
+   - Switches UI into conversation mode.
+4. View model emits:
+   - User message appended immediately.
+   - Streaming flag toggled true, then false after the simulated response.
+   - Assistant response describing the echo.
+5. History list auto-scrolls to the latest message; conversation summary title derives from the first user message.
+
+---
+
+## 6. State & ViewModel
+State is modelled in `src/main/kotlin/com/agents/smith/state/SmithState.kt`:
+
 ```kotlin
 data class SmithState(
-  val sessionId: String,
-  val connected: Boolean,
-  val history: List<Message>,
-  val streaming: Boolean,
-  val settings: Settings,
-  val consentMap: Map<String, Boolean>
+    val sessionId: String = UUID.randomUUID().toString(),
+    val connected: Boolean = false,
+    val history: List<Message> = emptyList(),
+    val streaming: Boolean = false,
+    val settings: Settings = Settings(),
+    val consentMap: Map<String, Boolean> = emptyMap()
 )
 ```
 
----
+- `Message` tracks `role`, `content`, and a timestamp.
+- `Settings` stores model name, streaming flag, and max tokens.
+- `initial()` seeds the history with a system welcome note.
 
-## 8. Error Handling
-- Show descriptive messages for network/auth errors.
-- Cancel ongoing requests gracefully.
-- Retry transient errors (2x, exponential backoff).
-- Offer user a “copy request JSON” for debugging.
+`SmithViewModel` (`src/main/kotlin/com/agents/smith/viewmodel/SmithViewModel.kt`) manages state via `MutableStateFlow` scoped to `Dispatchers.IO`. Key operations:
 
----
-
-## 9. Kotlin / JDK 24 Implementation Notes
-- Use Kotlin coroutines (`Dispatchers.IO` for background, `Dispatchers.Main` for UI).
-- Use IntelliJ UI components (`JPanel`, `JBList`, etc.).
-- Wrap file edits in `WriteCommandAction.runWriteCommandAction(project)`.
-- Dispose coroutines on project close (`Disposable` lifecycle).
+- `updateConnectionStatus`, `updateSettings`, `updateConsent` mutate top-level fields.
+- `sendUserMessage` trims input, appends a user message, and calls `simulateAssistantResponse`.
+- `simulateAssistantResponse` toggles `streaming`, delays 250 ms, and appends a canned assistant reply that echoes the user's text.
+- `dispose()` cancels the coroutine scope; the tool window panel registers itself as a `Disposable`.
 
 ---
 
-## 10. Streaming Example (Kotlin)
-```kotlin
-val call = client.streamChat(request)
-val uiScope = CoroutineScope(Dispatchers.Main)
-
-scope.launch {
-    client.streamChat(request).collect { frame ->
-        when (frame.type) {
-            Frame.Type.DELTA -> uiScope.launch { appendToConversation(frame.content) }
-            Frame.Type.DONE -> uiScope.launch { markRequestComplete() }
-            Frame.Type.ERROR -> uiScope.launch { showError(frame.message) }
-        }
-    }
-}
-```
+## 7. Consent, Settings, and Security
+- Consent tracking exists in `SmithState.consentMap`, but no UI prompts are wired to it yet.
+- The Settings button informs users that backend configuration screens are pending; there is no password storage or API key flow.
+- No code exits the IDE. All network interactions are stubbed, keeping the UI safe for development without secrets.
 
 ---
 
-## 11. Codex System Prompt Example
-```
-SYSTEM: You are Smith's UI assistant generator.
-Environment:
-- IntelliJ IDEA Community + Oracle JDK 24
-- Kotlin plugin project, UI-only
-- Your job: produce Kotlin-safe UI code, JSON schemas, and workflows.
-
-Constraints:
-- No file writes without user confirmation.
-- No secret values in examples.
-- Use coroutines for async work.
-- Always request user consent before sending code externally.
-- Focus on incremental, streaming-friendly UI updates.
-```
+## 8. Error Handling & UX Notes
+- Placeholder actions surface `Messages.showInfoMessage` dialogs labelled "Coming Soon".
+- There is no retry or error pipeline yet; `SmithViewModel` assumes success.
+- `streaming` is surfaced in state but the UI currently uses it only to toggle internal flags; no spinner/progress indicator is rendered.
 
 ---
 
-## 12. Testing Checklist
-- [ ] Tool window loads in sandbox.
-- [ ] API key + endpoint persisted correctly.
-- [ ] Consent dialog appears before sending context.
-- [ ] Streaming response updates UI incrementally.
-- [ ] Cancel works mid-response.
-- [ ] Patch preview confirm/deny flow functions.
-- [ ] Error handling covers auth + network failures.
+## 9. Assets & Icons
+- Custom icons live in `src/main/resources/icons/` (SVG): `chat.svg`, `cloud.svg`, `cloud_filled.svg`, `lightning_bolt.svg`, `lightning_bolt_filled.svg`, `terminal.svg`, plus existing Smith brand assets.
+- Toggle buttons switch between outline/filled variants for visual feedback.
+- `plugin.xml` registers `icons/Smith.svg` as the primary plugin icon and binds the tool window factory.
 
 ---
 
-## 13. Next Steps
-- Implement `ToolWindowFactory`, `Panel`, and `Settings` classes in Kotlin.
-- Integrate streaming client (Ktor preferred).
-- Add consent + patch preview UIs.
-- Later: connect to backend/LLM endpoint (BE project).
+## 10. Testing Checklist
+- [ ] `./gradlew runIde` launches Rider with the Smith tool window visible on the right.
+- [ ] Sending a message appends both user and assistant messages in the chat list.
+- [ ] Back button correctly toggles between overview and conversation layouts.
+- [ ] Prompt overflow actions and Settings button display their informational dialogs without exceptions.
+- [ ] Toggle buttons change icons/text and leave the UI stable.
+- [ ] No unexpected exceptions in the IDE log during basic interactions.
+
+---
+
+## 11. Next Steps
+- Replace the simulated assistant with real backend connectivity (streaming client, consent prompts, error handling).
+- Implement persistent conversation history and multi-conversation navigation in the tasks pane.
+- Wire toggle states (`Auto context`, `Agent`, `Think More`) into the future backend contract.
+- Build settings UI for endpoint configuration and API key management.
+- Extend consent handling so `consentMap` drives outbound requests and prompts the user when new context is required.
