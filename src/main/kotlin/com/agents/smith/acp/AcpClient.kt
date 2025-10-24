@@ -34,9 +34,9 @@ interface AcpClient {
     suspend fun cancelPrompt(request: AcpCancelRequest)
 
     /**
-     * Observe the streamed updates for a given session.
+     * Observe streamed updates for a given session.
      */
-    fun observeSession(sessionId: String): Flow<AcpSessionEvent>
+    fun observeSession(sessionId: String): Flow<AcpSessionUpdate>
 }
 
 data class AcpSessionHandle(
@@ -49,11 +49,10 @@ data class AcpSessionHandle(
  * Separating it keeps the client testable and lets us swap transports (HTTP, WebSocket, etc.).
  */
 interface AcpTransport {
-    suspend fun <Req : Any, Res : Any> request(
-        method: String,
-        params: Req?,
-        responseMapper: (AcpJsonRpcResponse<*>) -> Res
-    ): Res
+    suspend fun <Params : Any> post(
+        path: String,
+        payload: AcpJsonRpcRequest<Params>
+    ): AcpJsonRpcResponse<RawJson>
 
-    fun sessionEvents(sessionId: String): Flow<AcpSessionEvent>
+    fun sessionUpdates(sessionId: String): Flow<AcpSessionUpdate>
 }

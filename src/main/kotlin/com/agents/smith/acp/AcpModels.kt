@@ -1,5 +1,6 @@
 package com.agents.smith.acp
 
+import com.fasterxml.jackson.databind.JsonNode
 import java.time.Instant
 
 /**
@@ -133,6 +134,11 @@ sealed interface AcpSessionEvent {
         val previousMode: String?,
         val nextMode: String
     ) : AcpSessionEvent
+
+    data class Unknown(
+        val type: String?,
+        val raw: Map<String, Any?>
+    ) : AcpSessionEvent
 }
 
 /**
@@ -158,3 +164,5 @@ data class AcpJsonRpcError(
     val message: String,
     val data: Any? = null
 )
+
+typealias RawJson = JsonNode
