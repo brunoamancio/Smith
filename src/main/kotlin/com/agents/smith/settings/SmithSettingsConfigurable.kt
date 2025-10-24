@@ -1,7 +1,6 @@
 package com.agents.smith.settings
 
 import com.agents.smith.viewmodel.SmithViewModel
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
 import javax.swing.JComponent
@@ -10,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import javax.swing.SwingUtilities
 
 class SmithSettingsConfigurable(private val project: Project) : Configurable {
 
@@ -63,7 +63,7 @@ class SmithSettingsConfigurable(private val project: Project) : Configurable {
         form.showTestInProgress()
         scope.launch {
             val result = viewModel.testConnection(snapshot, token)
-            ApplicationManager.getApplication().invokeLater {
+            SwingUtilities.invokeLater {
                 form.showTestResult(result.success, result.message)
             }
         }
