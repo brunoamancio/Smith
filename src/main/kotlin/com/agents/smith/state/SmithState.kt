@@ -28,9 +28,18 @@ data class SmithState(
     }
 
     data class Settings(
-        val model: String = "gpt-4o-mini",
+        val model: String = "gpt-5-codex",
         val stream: Boolean = true,
-        val maxTokens: Int = 1024
+        val maxTokens: Int = 1024,
+        val acpEndpoint: String = "",
+        val acpTokenAlias: String? = null,
+        val acpCapabilities: AcpCapabilities = AcpCapabilities()
+    )
+
+    data class AcpCapabilities(
+        val allowFileSystem: Boolean = false,
+        val allowTerminal: Boolean = false,
+        val allowApplyPatch: Boolean = false
     )
 
     companion object {

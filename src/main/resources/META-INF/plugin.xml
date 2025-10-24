@@ -31,5 +31,9 @@
                 anchor="right"
                 factoryClass="com.agents.smith.toolwindow.SmithToolWindowFactory"
                 icon="icons/Smith.svg"/>
+        <projectConfigurable
+                id="com.agents.smith.settings"
+                instance="com.agents.smith.settings.SmithSettingsConfigurable"
+                displayName="Smith"/>
     </extensions>
 </idea-plugin>

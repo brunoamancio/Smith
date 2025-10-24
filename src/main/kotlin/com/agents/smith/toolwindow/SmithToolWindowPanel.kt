@@ -1,9 +1,12 @@
 package com.agents.smith.toolwindow
 
+import com.agents.smith.settings.SmithSettingsListener
+import com.agents.smith.settings.SmithSettingsService
 import com.agents.smith.state.SmithState
 import com.agents.smith.viewmodel.SmithViewModel
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.Disposer
@@ -111,13 +114,16 @@ class SmithToolWindowPanel(private val project: Project) :
         minimumSize = smallSize
         maximumSize = smallSize
     }
+    private val agentModeToggle = createAgentToggle()
 
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
     private var stateJob: Job? = null
     private var viewModel: SmithViewModel? = null
+    private val settingsService = SmithSettingsService.getInstance(project)
 
     private var showingConversation = false
     private var latestState: SmithState? = null
+    private var updatingAgentToggle = false
     private val centerPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
         isOpaque = false
     }
@@ -133,6 +139,11 @@ class SmithToolWindowPanel(private val project: Project) :
         add(centerPanel, BorderLayout.CENTER)
         showMainView()
         configurePromptActions()
+
+        project.messageBus.connect(this).subscribe(
+            SmithSettingsService.TOPIC,
+            SmithSettingsListener { settings -> viewModel?.updateSettings(settings) }
+        )
     }
 
     fun bind(viewModel: SmithViewModel) {
@@ -140,6 +151,7 @@ class SmithToolWindowPanel(private val project: Project) :
 
         this.viewModel = viewModel
         Disposer.register(this, viewModel)
+        viewModel.updateSettings(settingsService.toSmithSettings())
 
         stateJob = uiScope.launch {
             viewModel.state.collect { state ->
@@ -435,14 +447,13 @@ class SmithToolWindowPanel(private val project: Project) :
 
         val autoContextButton = createAutoContextToggle()
 
-        val agentToggle = createAgentToggle()
         val thinkMoreToggle = createThinkMoreToggle()
 
         val leftGroup = JBPanel<JBPanel<*>>(HorizontalLayout(JBUI.scale(4))).apply {
             isOpaque = false
             add(plusButton)
             add(autoContextButton)
-            add(agentToggle)
+            add(agentModeToggle)
             add(thinkMoreToggle)
         }
 
@@ -545,6 +556,8 @@ class SmithToolWindowPanel(private val project: Project) :
 
         updateConversationSummaries(state)
 
+        syncAgentToggle(state.settings.acpCapabilities.allowTerminal)
+
         if (showingConversation) {
             showConversationView()
         }
@@ -633,11 +646,7 @@ class SmithToolWindowPanel(private val project: Project) :
             minimumSize = smallSize
             maximumSize = smallSize
             addActionListener {
-                Messages.showInfoMessage(
-                    project,
-                    "Smith settings will live here. Until backend integration is ready, configure your endpoint manually.",
-                    "Smith Settings"
-                )
+                ShowSettingsUtil.getInstance().showSettingsDialog(project, "Smith")
             }
         }
     }
@@ -694,23 +703,23 @@ class SmithToolWindowPanel(private val project: Project) :
     private fun createAgentToggle(): JToggleButton {
         val agentIcon = IconLoader.getIcon("icons/terminal.svg", javaClass)
         val chatIcon = IconLoader.getIcon("icons/chat.svg", javaClass)
-        return createToolbarToggle("Agent", agentIcon).apply {
+        return createToolbarToggle("Chat", chatIcon, "Agent").apply {
             margin = JBUI.insets(4, JBUI.scale(8), 4, JBUI.scale(10))
-            val agentLabel = "Agent"
-            val chatLabel = "Chat"
             val baseSize = preferredSize
             val narrowedWidth = (baseSize.width * 0.95f).toInt().coerceAtLeast(JBUI.scale(60))
             val finalSize = Dimension(narrowedWidth, baseSize.height)
             preferredSize = finalSize
             minimumSize = finalSize
             maximumSize = finalSize
+            putClientProperty(AGENT_ICON_PROPERTY, agentIcon)
+            putClientProperty(CHAT_ICON_PROPERTY, chatIcon)
+            isSelected = false
+            updateAgentTogglePresentation(this, false)
             addChangeListener {
-                if (isSelected) {
-                    icon = chatIcon
-                    text = chatLabel
-                } else {
-                    icon = agentIcon
-                    text = agentLabel
+                val agentActive = isSelected
+                updateAgentTogglePresentation(this, agentActive)
+                if (!updatingAgentToggle) {
+                    applyAgentMode(agentActive)
                 }
             }
         }
@@ -760,6 +769,8 @@ class SmithToolWindowPanel(private val project: Project) :
         private const val BUTTON_TYPE_TOOLBAR = "toolbar"
         private const val SIZE_VARIANT_SMALL = "small"
         private const val COMING_SOON_TITLE = "Coming Soon"
+        private const val AGENT_ICON_PROPERTY = "smith.agent.icon"
+        private const val CHAT_ICON_PROPERTY = "smith.chat.icon"
     }
 
     private data class ConversationSummary(
@@ -767,5 +778,48 @@ class SmithToolWindowPanel(private val project: Project) :
         val title: String,
         val status: String
     )
+
+    private fun applyAgentMode(agentActive: Boolean) {
+        val baseSettings = (latestState?.settings ?: settingsService.toSmithSettings())
+        if (
+            baseSettings.acpCapabilities.allowTerminal == agentActive &&
+            baseSettings.acpCapabilities.allowApplyPatch == agentActive
+        ) {
+            settingsService.updateRuntimeCapabilities(agentActive, agentActive)
+            return
+        }
+        val updatedSettings = baseSettings.copy(
+            acpCapabilities = baseSettings.acpCapabilities.copy(
+                allowTerminal = agentActive,
+                allowApplyPatch = agentActive
+            )
+        )
+        latestState = latestState?.copy(settings = updatedSettings)
+        settingsService.updateRuntimeCapabilities(
+            allowTerminal = agentActive,
+            allowApplyPatch = agentActive
+        )
+        viewModel?.updateSettings(updatedSettings)
+    }
+
+    private fun syncAgentToggle(agentActive: Boolean) {
+        if (agentModeToggle.isSelected == agentActive) {
+            updateAgentTogglePresentation(agentModeToggle, agentActive)
+            return
+        }
+        updatingAgentToggle = true
+        try {
+            agentModeToggle.isSelected = agentActive
+        } finally {
+            updatingAgentToggle = false
+        }
+        updateAgentTogglePresentation(agentModeToggle, agentActive)
+    }
+
+    private fun updateAgentTogglePresentation(button: JToggleButton, agentActive: Boolean) {
+        val agentIcon = button.getClientProperty(AGENT_ICON_PROPERTY) as? Icon ?: return
+        val chatIcon = button.getClientProperty(CHAT_ICON_PROPERTY) as? Icon ?: return
+        button.icon = if (agentActive) agentIcon else chatIcon
+    }
 
 }

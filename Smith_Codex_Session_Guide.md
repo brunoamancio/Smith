@@ -94,7 +94,11 @@ data class SmithState(
 
 ## 7. Consent, Settings, and Security
 - Consent tracking exists in `SmithState.consentMap`, but no UI prompts are wired to it yet.
-- The Settings button informs users that backend configuration screens are pending; there is no password storage or API key flow.
+- Settings button now opens the IntelliJ Settings dialog (`Settings > Tools > Smith`) backed by a project `PersistentStateComponent`. Fields:
+  - Default model name, streaming toggle, max tokens.
+  - ACP endpoint URL and optional API token (stored via Password Safe under alias `com.agents.smith.acp.default`).
+  - Capability toggles for filesystem, terminal, and apply-patch permissions.
+  Updating the form persists immediately and notifies the tool window to refresh its runtime settings.
 - No code exits the IDE. All network interactions are stubbed, keeping the UI safe for development without secrets.
 
 ---
