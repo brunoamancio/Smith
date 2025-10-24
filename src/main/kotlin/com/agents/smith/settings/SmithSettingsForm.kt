@@ -2,15 +2,18 @@ package com.agents.smith.settings
 
 import com.agents.smith.state.SmithState
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
+import java.awt.BorderLayout
+import javax.swing.JButton
+import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JSpinner
 import javax.swing.SpinnerNumberModel
-import java.awt.BorderLayout
 
 class SmithSettingsForm {
 
@@ -36,9 +39,12 @@ class SmithSettingsForm {
     private val endpointField = JBTextField()
     private val tokenField = JBPasswordField()
     private val allowFileSystemCheck = JBCheckBox("Allow file system access (ACP fs.*)")
+    private val testConnectionButton = JButton("Test Connection")
+    private val testResultLabel = JLabel(" ")
 
     private fun createRootPanel(): JPanel {
         val content = buildPanel()
+        resetTestStatus()
         return JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty()
             add(content, BorderLayout.NORTH)
@@ -54,6 +60,11 @@ class SmithSettingsForm {
             .addLabeledComponent("ACP endpoint URL:", endpointField, 1, false)
             .addLabeledComponent("ACP API token:", tokenField, 1, false)
             .addComponent(allowFileSystemCheck)
+            .addComponent(testConnectionButton)
+            .addComponent(testResultLabel.apply {
+                border = JBUI.Borders.empty(2, 0, 0, 0)
+                foreground = JBColor.GRAY
+            })
 
         return builder.panel.apply {
             border = JBUI.Borders.empty(4, 0, 0, 0)
@@ -77,23 +88,52 @@ class SmithSettingsForm {
         endpointField.text = settings.acpEndpoint
         tokenField.text = token
         allowFileSystemCheck.isSelected = settings.acpCapabilities.allowFileSystem
+        resetTestStatus()
     }
 
     fun buildSettings(current: SmithState.Settings): Pair<SmithState.Settings, String?> {
+        val (updatedSettings, rawToken) = snapshotSettings(current)
+        val sanitizedToken = rawToken.takeIf { it.isNotBlank() }
+        tokenField.text = sanitizedToken.orEmpty()
+        return updatedSettings to sanitizedToken
+    }
+
+    fun snapshotSettings(current: SmithState.Settings): Pair<SmithState.Settings, String> {
+        val tokenText = tokenField.password.decode()
         val updatedSettings = current.copy(
             model = modelField.selectedItem?.toString().orEmpty().ifBlank { current.model },
             stream = streamCheckBox.isSelected,
             maxTokens = maxTokensSpinner.value as Int,
             acpEndpoint = endpointField.text.trim(),
-            acpTokenAlias = if (tokenField.password.isNotEmpty()) current.acpTokenAlias ?: SmithSettingsService.DEFAULT_TOKEN_ALIAS else null,
+            acpTokenAlias = if (tokenText.isNotBlank()) current.acpTokenAlias ?: SmithSettingsService.DEFAULT_TOKEN_ALIAS else null,
             acpCapabilities = current.acpCapabilities.copy(
                 allowFileSystem = allowFileSystemCheck.isSelected
             )
         )
-        val tokenText = tokenField.password.decode()
-        val sanitizedToken = tokenText.takeIf { it.isNotBlank() }
-        tokenField.text = sanitizedToken.orEmpty()
-        return updatedSettings to sanitizedToken
+        return updatedSettings to tokenText
+    }
+
+    fun onTestConnectionRequested(handler: () -> Unit) {
+        testConnectionButton.actionListeners.forEach { testConnectionButton.removeActionListener(it) }
+        testConnectionButton.addActionListener { handler() }
+    }
+
+    fun showTestInProgress() {
+        testConnectionButton.isEnabled = false
+        testResultLabel.foreground = JBColor.GRAY
+        testResultLabel.text = "Testing connection..."
+    }
+
+    fun showTestResult(success: Boolean, message: String) {
+        testConnectionButton.isEnabled = true
+        testResultLabel.foreground = if (success) JBColor(0x4CAF50, 0x4CAF50) else JBColor(0xF44336, 0xF44336)
+        testResultLabel.text = message
+    }
+
+    fun resetTestStatus() {
+        testConnectionButton.isEnabled = true
+        testResultLabel.foreground = JBColor.GRAY
+        testResultLabel.text = " "
     }
 
     private fun CharArray?.decode(): String = this?.let { String(it) } ?: ""
