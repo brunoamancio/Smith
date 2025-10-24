@@ -5,7 +5,6 @@ import com.agents.smith.viewmodel.SmithViewModel
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.IconLoader
@@ -186,7 +185,7 @@ class SmithToolWindowPanel(private val project: Project) :
             left = true,
             bottom = false,
             right = false,
-            padding = JBUI.insets(4, 8, 6, 4)
+            padding = JBUI.insets(4, 4, 6, 4)
         )
 
         val tasksCell = createTableCell(
@@ -205,7 +204,7 @@ class SmithToolWindowPanel(private val project: Project) :
             left = true,
             bottom = true,
             right = true,
-            padding = JBUI.insets(8, 8, 8, 8)
+            padding = JBUI.insets(8, 4, 8, 8)
         )
 
         table.add(
@@ -291,14 +290,14 @@ class SmithToolWindowPanel(private val project: Project) :
     private fun buildMainPlaceholderPane(): JComponent {
         val heading = JBLabel(TASK_OVERVIEW_TITLE).apply {
             font = font.deriveFont(Font.BOLD, font.size2D + 1f)
-            border = JBEmptyBorder(12, 8, 4, 8)
+            border = JBEmptyBorder(12, 4, 4, 8)
         }
 
         val description = JBLabel(
             "<html>Select a recent task to review the conversation.<br>" +
                 "Use the prompt below to start something new.</html>"
         ).apply {
-            border = JBEmptyBorder(0, 8, 12, 8)
+            border = JBEmptyBorder(0, 4, 12, 8)
             foreground = JBColor(0x8C919E, 0x8C919E)
         }
 
@@ -325,11 +324,6 @@ class SmithToolWindowPanel(private val project: Project) :
     }
 
     private fun buildTasksPane(): JComponent {
-        val header = JBLabel("Recent tasks").apply {
-            foreground = columnHeaderColor
-            border = JBEmptyBorder(0, 0, 4, 0)
-        }
-
         val scroll = JBScrollPane(conversationList).apply {
             border = JBUI.Borders.empty()
             isOpaque = false
@@ -341,7 +335,6 @@ class SmithToolWindowPanel(private val project: Project) :
 
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
-            add(header, BorderLayout.NORTH)
             add(scroll, BorderLayout.CENTER)
         }
     }
@@ -360,7 +353,7 @@ class SmithToolWindowPanel(private val project: Project) :
             isOpaque = false
             viewport.isOpaque = false
             viewport.background = promptBackground
-            viewportBorder = JBUI.Borders.empty(12, 12, 12, 12)
+            viewportBorder = JBUI.Borders.empty(12, 6, 12, 12)
         }
 
         val actionsRow = createPromptActionsRow()
@@ -432,19 +425,7 @@ class SmithToolWindowPanel(private val project: Project) :
             addActionListener { showPromptActionsMenu(this) }
         }
 
-        val modeOptions = arrayOf(
-            ModeOption("Code", "Delegate coding task"),
-            ModeOption("Ask", "Ask Junie anything")
-        )
-
-        val modeSelector = ComboBox(modeOptions).apply {
-            renderer = ModeOptionRenderer()
-            selectedIndex = 0
-            isOpaque = false
-            border = JBUI.Borders.empty()
-            putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
-            maximumRowCount = modeOptions.size
-        }
+        val autoContextButton = createAutoContextToggle()
 
         val agentToggle = createAgentToggle()
         val thinkMoreToggle = createThinkMoreToggle()
@@ -452,7 +433,7 @@ class SmithToolWindowPanel(private val project: Project) :
         val leftGroup = JBPanel<JBPanel<*>>(HorizontalLayout(JBUI.scale(4))).apply {
             isOpaque = false
             add(plusButton)
-            add(modeSelector)
+            add(autoContextButton)
             add(agentToggle)
             add(thinkMoreToggle)
         }
@@ -469,7 +450,7 @@ class SmithToolWindowPanel(private val project: Project) :
 
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
-            border = JBUI.Borders.empty(0, 8, 0, 8)
+            border = JBUI.Borders.empty(0, 4, 0, 8)
             add(leftWrapper, BorderLayout.WEST)
             add(rightWrapper, BorderLayout.EAST)
         }
@@ -484,8 +465,7 @@ class SmithToolWindowPanel(private val project: Project) :
             isOpaque = false
             border = JBUI.Borders.compound(
                 JBUI.Borders.customLine(idleBorderColor, 1),
-//                JBUI.Borders.empty(2, 6, 2, 6)
-                JBUI.Borders.empty(0, 0, 0, 0)
+                JBUI.Borders.empty(2, 6, 2, 6)
             )
             putClientProperty(CLIENT_PROPERTY_BUTTON_TYPE, BUTTON_TYPE_TOOLBAR)
             putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
@@ -511,48 +491,14 @@ class SmithToolWindowPanel(private val project: Project) :
             isFocusPainted = false
             isRolloverEnabled = false
             isFocusable = false
-            border = JBUI.Borders.empty()
+            border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(idleBorderColor, 1),
+                JBUI.Borders.empty(2, 2, 2, 2)
+            )
             preferredSize = JBUI.size(28, 28)
             minimumSize = preferredSize
             putClientProperty(CLIENT_PROPERTY_BUTTON_TYPE, BUTTON_TYPE_TOOLBAR)
             putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
-        }
-    }
-
-    private data class ModeOption(val label: String, val description: String)
-
-    private inner class ModeOptionRenderer : ListCellRenderer<ModeOption> {
-        override fun getListCellRendererComponent(
-            list: JList<out ModeOption>,
-            value: ModeOption?,
-            index: Int,
-            isSelected: Boolean,
-            cellHasFocus: Boolean
-        ): Component {
-            val option = value ?: return JBLabel()
-            if (index == -1) {
-                return JBLabel(option.label)
-            }
-
-            val titleLabel = JBLabel(option.label)
-            val descriptionLabel = JBLabel(option.description).apply {
-                font = font.deriveFont(font.size2D - 1f)
-                foreground = JBColor(0x8C8C8C, 0x9DA1A9)
-            }
-
-            return JBPanel<JBPanel<*>>(VerticalLayout(2)).apply {
-                border = JBEmptyBorder(6, 8, 6, 8)
-                isOpaque = true
-                background = if (isSelected) list.selectionBackground else list.background
-
-                titleLabel.foreground = if (isSelected) list.selectionForeground else list.foreground
-                if (isSelected) {
-                    descriptionLabel.foreground = list.selectionForeground
-                }
-
-                add(titleLabel)
-                add(descriptionLabel)
-            }
         }
     }
 
@@ -800,6 +746,25 @@ class SmithToolWindowPanel(private val project: Project) :
         }
     }
 
+    private fun createAutoContextToggle(): JToggleButton {
+        val idleIcon = IconLoader.getIcon("icons/lightning_bolt.svg", javaClass)
+        val activeIcon = IconLoader.getIcon("icons/lightning_bolt_filled.svg", javaClass)
+        return createToolbarToggle("Auto context", idleIcon).apply {
+            val baseSize = preferredSize
+            val narrowedWidth = (baseSize.width * 0.95f).toInt().coerceAtLeast(JBUI.scale(60))
+            val finalSize = Dimension(narrowedWidth, baseSize.height)
+            preferredSize = finalSize
+            minimumSize = finalSize
+            maximumSize = finalSize
+            horizontalAlignment = SwingConstants.CENTER
+            horizontalTextPosition = SwingConstants.RIGHT
+            iconTextGap = JBUI.scale(6)
+            addChangeListener {
+                icon = if (isSelected) activeIcon else idleIcon
+            }
+        }
+    }
+
     private companion object {
         private const val TASK_OVERVIEW_TITLE = "Task overview"
         private const val CLIENT_PROPERTY_BUTTON_TYPE = "JButton.buttonType"
@@ -816,4 +781,3 @@ class SmithToolWindowPanel(private val project: Project) :
     )
 
 }
-
