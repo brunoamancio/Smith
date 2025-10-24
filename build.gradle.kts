@@ -17,6 +17,10 @@ repositories {
 // Configure IntelliJ Platform Gradle Plugin
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
+    val coroutinesVersion: String by project
+    val okhttpVersion: String by project
+    val jacksonKotlinVersion: String by project
+
     intellijPlatform {
         //create("IC", "2025.1.4.1")
         //create("RD", "2025.2.2.1");
@@ -29,11 +33,10 @@ dependencies {
         // bundledPlugin("com.intellij.java")
     }
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.9.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutinesVersion")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:$coroutinesVersion")
+    implementation("com.squareup.okhttp3:okhttp:$okhttpVersion")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:$jacksonKotlinVersion")
 }
 
 intellijPlatform {

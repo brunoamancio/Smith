@@ -3,23 +3,26 @@ package com.agents.smith.acp
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.sse.EventSource
-import okhttp3.sse.EventSourceListener
-import okhttp3.sse.EventSource.Factory
-import okhttp3.sse.EventSources
+import okhttp3.Response
+import java.io.BufferedReader
 import java.io.IOException
 import java.util.UUID
+import kotlin.sequences.asSequence
 
 private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
@@ -32,16 +35,16 @@ data class AcpHttpTransportConfig(
 class AcpHttpTransport(
     private val config: AcpHttpTransportConfig,
     private val client: OkHttpClient = OkHttpClient(),
-    private val objectMapper: com.fasterxml.jackson.databind.ObjectMapper = jacksonObjectMapper()
+    private val objectMapper: com.fasterxml.jackson.databind.ObjectMapper = jacksonObjectMapper(),
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : AcpTransport {
 
     private val baseUrl: HttpUrl = config.baseUrl.trimEnd('/').toHttpUrl()
-    private val eventSourceFactory: Factory = EventSources.createFactory(client)
 
     override suspend fun <Params : Any> post(
         path: String,
         payload: AcpJsonRpcRequest<Params>
-    ): AcpJsonRpcResponse<RawJson> = withContext(Dispatchers.IO) {
+    ): AcpJsonRpcResponse<RawJson> = withContext(dispatcher) {
         val url = baseUrl.newBuilder()
             .addEncodedPathSegments(path.trimStart('/'))
             .build()
@@ -51,95 +54,108 @@ class AcpHttpTransport(
         } else {
             payload
         }
-        val body = objectMapper.writeValueAsString(envelope)
+
+        val requestBody = objectMapper.writeValueAsString(envelope)
             .toRequestBody(JSON_MEDIA_TYPE)
 
-        val requestBuilder = Request.Builder()
+        val request = Request.Builder()
             .url(url)
-            .post(body)
+            .post(requestBody)
             .header("Content-Type", JSON_MEDIA_TYPE.toString())
+            .apply {
+                config.defaultHeaders.forEach { (key, value) ->
+                    header(key, value)
+                }
+            }
+            .build()
 
-        config.defaultHeaders.forEach { (key, value) ->
-            requestBuilder.header(key, value)
-        }
+        client.newCall(request).execute().use { response ->
+            val rawBody = response.body?.string()
+                ?: throw AcpTransportException("ACP response body was empty for $path")
 
-        client.newCall(requestBuilder.build()).execute().use { response ->
-            val rawBody = response.body.string()
             val root = objectMapper.readTree(rawBody)
 
             val rpcResponse = AcpJsonRpcResponse(
-                jsonrpc = root["jsonrpc"]?.asText() ?: "2.0",
-                result = root["result"],
-                error = root["error"]?.takeIf { !it.isNull }?.let {
-                    objectMapper.treeToValue(it, AcpJsonRpcError::class.java)
+                jsonrpc = root.readText("jsonrpc") ?: "2.0",
+                result = root.readNode("result"),
+                error = root.readNode("error")?.let { node ->
+                    objectMapper.treeToValue(node, AcpJsonRpcError::class.java)
                 },
-                id = root["id"]?.takeIf { !it.isNull }?.asText()
+                id = root.readText("id")
             )
 
             if (!response.isSuccessful) {
-            val statusMessage = "HTTP ${response.code} when calling $path"
-            val message = rpcResponse.error?.let { "$statusMessage: ${it.message}" } ?: statusMessage
-            throw AcpTransportException(message)
-        }
+                val statusMessage = "HTTP ${response.code} when calling $path"
+                val message = rpcResponse.error?.let { "$statusMessage: ${it.message}" } ?: statusMessage
+                throw AcpTransportException(message)
+            }
 
-        rpcResponse
+            rpcResponse
         }
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     override fun sessionUpdates(sessionId: String): Flow<AcpSessionUpdate> = callbackFlow {
         val path = config.sessionUpdatesPathTemplate.format(sessionId)
         val url = baseUrl.newBuilder()
             .addEncodedPathSegments(path.trimStart('/'))
             .build()
 
-        val requestBuilder = Request.Builder()
+        val request = Request.Builder()
             .url(url)
             .get()
             .header("Accept", "text/event-stream")
-
-        config.defaultHeaders.forEach { (key, value) ->
-            requestBuilder.header(key, value)
-        }
-
-        val listener = object : EventSourceListener() {
-            override fun onEvent(
-                eventSource: EventSource,
-                id: String?,
-                type: String?,
-                data: String
-            ) {
-                try {
-                    val update = parseSessionUpdate(objectMapper.readTree(data))
-                    trySend(update).isSuccess
-                } catch (ex: Exception) {
-                    close(ex)
+            .apply {
+                config.defaultHeaders.forEach { (key, value) ->
+                    header(key, value)
                 }
             }
+            .build()
 
-            override fun onClosed(eventSource: EventSource) {
-                close()
+        val call = client.newCall(request)
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                close(e)
             }
 
-            override fun onFailure(eventSource: EventSource, t: Throwable?, response: okhttp3.Response?) {
-                val problem = t ?: IOException("Unknown SSE failure for session $sessionId")
-                close(problem)
-            }
-        }
+            override fun onResponse(call: Call, response: Response) {
+                response.use { resp ->
+                    val body = resp.body ?: run {
+                        close(AcpTransportException("ACP session updates response was empty for $sessionId"))
+                        return
+                    }
 
-        val eventSource = eventSourceFactory.newEventSource(requestBuilder.build(), listener)
+                    try {
+                        consumeEventStream(body.charStream().buffered()) { payload ->
+                            val update = parseSessionUpdate(objectMapper.readTree(payload))
+                            if (!isClosedForSend) {
+                                trySend(update).isSuccess
+                            }
+                        }
+
+                        if (!isClosedForSend) {
+                            close()
+                        }
+                    } catch (ex: Exception) {
+                        close(ex)
+                    }
+                }
+            }
+        })
 
         awaitClose {
-            eventSource.cancel()
+            call.cancel()
         }
     }
 
     private fun parseSessionUpdate(node: JsonNode): AcpSessionUpdate {
-        val sessionId = node["sessionId"]?.asText()
+        val sessionId = node.readText("sessionId")
             ?: throw AcpTransportException("Missing sessionId in update payload")
-        val promptId = node["promptId"]?.takeIf { !it.isNull }?.asText()
-        val eventsNode = node["events"] ?: objectMapper.createArrayNode()
-
-        val events = eventsNode.map { parseSessionEvent(it) }
+        val promptId = node.readText("promptId")
+        val events = node.readNode("events")
+            .arrayElements()
+            .map { parseSessionEvent(it) }
+            .toList()
 
         return AcpSessionUpdate(
             sessionId = sessionId,
@@ -149,82 +165,116 @@ class AcpHttpTransport(
     }
 
     private fun parseSessionEvent(node: JsonNode): AcpSessionEvent {
-        val type = node["type"]?.asText()
-        if (type == "message") {
-            val messageNode = node["message"]
-            val roleText = messageNode?.get("role")?.asText()
-            val firstText = messageNode
-                ?.get("content")
-                ?.firstOrNull { it["type"]?.asText() == "text" }
-                ?.get("text")
-                ?.asText()
+        return parseMessageEvent(node)
+            ?: parseToolCallStarted(node)
+            ?: parseToolCallCompleted(node)
+            ?: parsePlanUpdated(node)
+            ?: parseModeChanged(node)
+            ?: AcpSessionEvent.Unknown(
+                type = node.readText("type"),
+                raw = convertToMap(node)
+            )
+    }
 
-            if (roleText != null && firstText != null) {
-                val role = runCatching { AcpMessageRole.valueOf(roleText.uppercase()) }
-                    .getOrDefault(AcpMessageRole.ASSISTANT)
-                val done = node["done"]?.asBoolean() ?: false
-                return AcpSessionEvent.MessageChunk(
-                    role = role,
-                    content = AcpMessagePart.Text(firstText),
-                    done = done
-                )
-            }
-        }
+    private fun parseMessageEvent(node: JsonNode): AcpSessionEvent? {
+        val messageNode = node.readNode("message") ?: return null
+        val roleText = messageNode.readText("role") ?: return null
+        val textContent = messageNode.readNode("content").firstTextChunk() ?: return null
+        val role = runCatching { AcpMessageRole.valueOf(roleText.uppercase()) }
+            .getOrDefault(AcpMessageRole.ASSISTANT)
+        val done = node.readBoolean("done") ?: false
+        return AcpSessionEvent.MessageChunk(
+            role = role,
+            content = AcpMessagePart.Text(textContent),
+            done = done
+        )
+    }
 
-        if (type == "tool_call_started") {
-            val callId = node["callId"]?.asText()
-            val name = node["name"]?.asText()
-            if (callId != null && name != null) {
-                val args = convertToMap(node["arguments"])
-                return AcpSessionEvent.ToolCallStarted(
-                    callId = callId,
-                    name = name,
-                    arguments = args
-                )
-            }
-        }
+    private fun parseToolCallStarted(node: JsonNode): AcpSessionEvent? {
+        val callId = node.readText("callId") ?: return null
+        val name = node.readText("name") ?: return null
+        val arguments = convertToMap(node.readNode("arguments"))
+        return AcpSessionEvent.ToolCallStarted(callId = callId, name = name, arguments = arguments)
+    }
 
-        if (type == "tool_call_completed") {
-            val callId = node["callId"]?.asText()
-            if (callId != null) {
-                val result = convertToMap(node["result"])
-                return AcpSessionEvent.ToolCallCompleted(
-                    callId = callId,
-                    result = result
-                )
-            }
-        }
+    private fun parseToolCallCompleted(node: JsonNode): AcpSessionEvent? {
+        val callId = node.readText("callId") ?: return null
+        val result = convertToMap(node.readNode("result"))
+        return AcpSessionEvent.ToolCallCompleted(callId = callId, result = result)
+    }
 
-        if (type == "plan_updated") {
-            val summary = node["summary"]?.asText()
-            if (summary != null) {
-                val steps = node["steps"]?.map { it.asText() } ?: emptyList()
-                return AcpSessionEvent.PlanUpdated(
-                    summary = summary,
-                    steps = steps
-                )
-            }
-        }
+    private fun parsePlanUpdated(node: JsonNode): AcpSessionEvent? {
+        val summary = node.readText("summary") ?: return null
+        val steps = node.readNode("steps")
+            .arrayElements()
+            .map { it.asText() }
+            .toList()
+        return AcpSessionEvent.PlanUpdated(summary = summary, steps = steps)
+    }
 
-        if (type == "mode_changed") {
-            val nextMode = node["nextMode"]?.asText()
-            if (nextMode != null) {
-                val previousMode = node["previousMode"]?.asText()
-                return AcpSessionEvent.ModeChanged(
-                    previousMode = previousMode,
-                    nextMode = nextMode
-                )
-            }
-        }
-
-        val raw = convertToMap(node)
-        return AcpSessionEvent.Unknown(type = type, raw = raw)
+    private fun parseModeChanged(node: JsonNode): AcpSessionEvent? {
+        val nextMode = node.readText("nextMode") ?: return null
+        val previousMode = node.readText("previousMode")
+        return AcpSessionEvent.ModeChanged(previousMode = previousMode, nextMode = nextMode)
     }
 
     private fun convertToMap(node: JsonNode?): Map<String, Any?> {
-        if (node == null || node.isNull) return emptyMap()
+        if (node == null) return emptyMap()
         return objectMapper.convertValue(node, object : TypeReference<Map<String, Any?>>() {})
+    }
+
+    private fun consumeEventStream(reader: BufferedReader, onData: (String) -> Unit) {
+        val dataBuilder = StringBuilder()
+
+        fun flushEvent() {
+            if (dataBuilder.isNotEmpty()) {
+                onData(dataBuilder.toString().trimEnd())
+                dataBuilder.setLength(0)
+            }
+        }
+
+        try {
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isEmpty()) {
+                    flushEvent()
+                    continue
+                }
+                if (line.startsWith("data:")) {
+                    val payload = line.removePrefix("data:").trimStart()
+                    dataBuilder.append(payload).append('\n')
+                }
+            }
+        } catch (ex: IOException) {
+            throw AcpTransportException("Failed to read ACP SSE stream", ex)
+        }
+
+        if (dataBuilder.isNotEmpty()) {
+            onData(dataBuilder.toString().trimEnd())
+        }
     }
 }
 
 class AcpTransportException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+private fun JsonNode.readNode(field: String): JsonNode? {
+    val child = get(field)
+    return if (child == null || child.isNull) null else child
+}
+
+private fun JsonNode.readText(field: String): String? = readNode(field)?.asText()
+
+private fun JsonNode.readBoolean(field: String): Boolean? = readNode(field)?.asBoolean()
+
+private fun JsonNode?.arrayElements(): Sequence<JsonNode> =
+    if (this != null && this.isArray) this.elements().asSequence() else emptySequence()
+
+private fun JsonNode?.firstTextChunk(): String? {
+    if (this == null) return null
+    for (element in arrayElements()) {
+        if (element.readText("type") == "text") {
+            return element.readText("text")
+        }
+    }
+    return null
+}
