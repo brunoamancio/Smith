@@ -142,7 +142,9 @@ class SmithToolWindowPanel(private val project: Project) :
 
         project.messageBus.connect(this).subscribe(
             SmithSettingsService.TOPIC,
-            SmithSettingsListener { settings -> viewModel?.updateSettings(settings) }
+            SmithSettingsListener { settings ->
+                viewModel?.updateSettings(settings, settingsService.loadToken())
+            }
         )
     }
 
@@ -151,7 +153,10 @@ class SmithToolWindowPanel(private val project: Project) :
 
         this.viewModel = viewModel
         Disposer.register(this, viewModel)
-        viewModel.updateSettings(settingsService.toSmithSettings())
+        viewModel.updateSettings(
+            settingsService.toSmithSettings(),
+            settingsService.loadToken()
+        )
 
         stateJob = uiScope.launch {
             viewModel.state.collect { state ->
@@ -799,7 +804,7 @@ class SmithToolWindowPanel(private val project: Project) :
             allowTerminal = agentActive,
             allowApplyPatch = agentActive
         )
-        viewModel?.updateSettings(updatedSettings)
+        viewModel?.updateSettings(updatedSettings, settingsService.loadToken())
     }
 
     private fun syncAgentToggle(agentActive: Boolean) {
