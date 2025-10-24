@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Dimension
 import java.awt.Font
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -84,13 +85,13 @@ class SmithToolWindowPanel(private val project: Project) :
         preferredSize = buttonSize
         minimumSize = buttonSize
         maximumSize = buttonSize
-        putClientProperty("JButton.buttonType", "toolbar")
-        putClientProperty("JComponent.sizeVariant", "small")
+        putClientProperty(CLIENT_PROPERTY_BUTTON_TYPE, BUTTON_TYPE_TOOLBAR)
+        putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
         toolTipText = "Back to tasks"
         addActionListener { showMainView() }
     }
 
-    private val conversationTitleLabel = JBLabel("Task overview").apply {
+    private val conversationTitleLabel = JBLabel(TASK_OVERVIEW_TITLE).apply {
         foreground = JBColor(0x5DF188, 0x5DF188)
         font = font.deriveFont(Font.BOLD, font.size2D + 1f)
         border = JBEmptyBorder(0, JBUI.scale(4), 0, 0)
@@ -99,10 +100,20 @@ class SmithToolWindowPanel(private val project: Project) :
     private val promptEditor = JBTextArea(4, 0)
     private val sendButton = JButton(AllIcons.Actions.Forward).apply {
         text = ""
-        putClientProperty("JButton.buttonType", "roundRect")
-        border = JBUI.Borders.empty(6)
+        putClientProperty(CLIENT_PROPERTY_BUTTON_TYPE, BUTTON_TYPE_TOOLBAR)
+        putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
+        border = JBUI.Borders.empty()
+        isContentAreaFilled = false
+        isOpaque = false
+        background = promptBackground
         isFocusPainted = false
+        isRolloverEnabled = false
+        isFocusable = false
         toolTipText = "Send (Ctrl+Enter)"
+        val smallSize = JBUI.size(20, 20)
+        preferredSize = smallSize
+        minimumSize = smallSize
+        maximumSize = smallSize
     }
 
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
@@ -157,7 +168,7 @@ class SmithToolWindowPanel(private val project: Project) :
 
         return JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
-            border = JBEmptyBorder(0, 0, 6, 0)
+            border = JBEmptyBorder(0, 0, 6, JBUI.scale(8))
             add(titlePanel, BorderLayout.WEST)
             add(createSettingsButton(), BorderLayout.EAST)
         }
@@ -278,7 +289,7 @@ class SmithToolWindowPanel(private val project: Project) :
     }
 
     private fun buildMainPlaceholderPane(): JComponent {
-        val heading = JBLabel("Task overview").apply {
+        val heading = JBLabel(TASK_OVERVIEW_TITLE).apply {
             font = font.deriveFont(Font.BOLD, font.size2D + 1f)
             border = JBEmptyBorder(12, 8, 4, 8)
         }
@@ -372,7 +383,7 @@ class SmithToolWindowPanel(private val project: Project) :
         val wasConversation = showingConversation
         showingConversation = false
         backButton.isVisible = false
-        conversationTitleLabel.text = "Task overview"
+        conversationTitleLabel.text = TASK_OVERVIEW_TITLE
         if (wasConversation || centerPanel.componentCount == 0) {
             renderTable(buildMainTable())
         }
@@ -431,18 +442,18 @@ class SmithToolWindowPanel(private val project: Project) :
             selectedIndex = 0
             isOpaque = false
             border = JBUI.Borders.empty()
-            putClientProperty("JComponent.sizeVariant", "small")
+            putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
             maximumRowCount = modeOptions.size
         }
 
-        val braveToggle = createToolbarToggle("Brave Mode", IconLoader.getIcon("icons/terminal.svg", javaClass))
-        val thinkMoreToggle = createToolbarToggle("Think More", IconLoader.getIcon("icons/cloud.svg", javaClass))
+        val agentToggle = createAgentToggle()
+        val thinkMoreToggle = createThinkMoreToggle()
 
         val leftGroup = JBPanel<JBPanel<*>>(HorizontalLayout(JBUI.scale(4))).apply {
             isOpaque = false
             add(plusButton)
             add(modeSelector)
-            add(braveToggle)
+            add(agentToggle)
             add(thinkMoreToggle)
         }
 
@@ -464,17 +475,30 @@ class SmithToolWindowPanel(private val project: Project) :
         }
     }
 
-    private fun createToolbarToggle(text: String, icon: Icon?): JToggleButton {
+    private fun createToolbarToggle(text: String, icon: Icon?, selectedText: String? = null): JToggleButton {
         return JToggleButton(text).apply {
             this.icon = icon
             horizontalAlignment = SwingConstants.LEFT
             iconTextGap = 6
             isContentAreaFilled = false
             isOpaque = false
-            border = JBUI.Borders.empty(4, 4, 4, 4)
-            putClientProperty("JButton.buttonType", "toolbar")
-            putClientProperty("JComponent.sizeVariant", "small")
+            border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(idleBorderColor, 1),
+//                JBUI.Borders.empty(2, 6, 2, 6)
+                JBUI.Borders.empty(0, 0, 0, 0)
+            )
+            putClientProperty(CLIENT_PROPERTY_BUTTON_TYPE, BUTTON_TYPE_TOOLBAR)
+            putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
             isFocusPainted = false
+            background = promptBackground
+            isRolloverEnabled = false
+            isFocusable = false
+            selectedText?.let { activeText ->
+                val defaultText = text
+                addChangeListener {
+                    this.text = if (isSelected) activeText else defaultText
+                }
+            }
         }
     }
 
@@ -483,12 +507,15 @@ class SmithToolWindowPanel(private val project: Project) :
             toolTipText = tooltip
             isContentAreaFilled = false
             isOpaque = false
+            background = promptBackground
             isFocusPainted = false
+            isRolloverEnabled = false
+            isFocusable = false
             border = JBUI.Borders.empty()
             preferredSize = JBUI.size(28, 28)
             minimumSize = preferredSize
-            putClientProperty("JButton.buttonType", "toolbar")
-            putClientProperty("JComponent.sizeVariant", "small")
+            putClientProperty(CLIENT_PROPERTY_BUTTON_TYPE, BUTTON_TYPE_TOOLBAR)
+            putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
         }
     }
 
@@ -635,7 +662,7 @@ class SmithToolWindowPanel(private val project: Project) :
         Messages.showInfoMessage(
             project,
             "Project file and image uploads will be available soon.",
-            "Coming Soon"
+            COMING_SOON_TITLE
         )
     }
 
@@ -643,7 +670,7 @@ class SmithToolWindowPanel(private val project: Project) :
         Messages.showInfoMessage(
             project,
             "Guideline creation is not implemented yet.",
-            "Coming Soon"
+            COMING_SOON_TITLE
         )
     }
 
@@ -651,21 +678,34 @@ class SmithToolWindowPanel(private val project: Project) :
         Messages.showInfoMessage(
             project,
             "AI ignore file generation is not implemented yet.",
-            "Coming Soon"
+            COMING_SOON_TITLE
         )
     }
 
     private fun createSettingsButton(): JComponent {
-        val button = JButton(AllIcons.General.Settings)
-        button.toolTipText = "Open Smith settings"
-        button.addActionListener {
-            Messages.showInfoMessage(
-                project,
-                "Smith settings will live here. Until backend integration is ready, configure your endpoint manually.",
-                "Smith Settings"
-            )
+        return JButton(AllIcons.General.Settings).apply {
+            toolTipText = "Open Smith settings"
+            isContentAreaFilled = false
+            isOpaque = false
+            background = promptBackground
+            border = JBUI.Borders.empty()
+            isFocusPainted = false
+            isRolloverEnabled = false
+            isFocusable = false
+            putClientProperty(CLIENT_PROPERTY_BUTTON_TYPE, BUTTON_TYPE_TOOLBAR)
+            putClientProperty(CLIENT_PROPERTY_SIZE_VARIANT, SIZE_VARIANT_SMALL)
+            val smallSize = JBUI.size(20, 20)
+            preferredSize = smallSize
+            minimumSize = smallSize
+            maximumSize = smallSize
+            addActionListener {
+                Messages.showInfoMessage(
+                    project,
+                    "Smith settings will live here. Until backend integration is ready, configure your endpoint manually.",
+                    "Smith Settings"
+                )
+            }
         }
-        return button
     }
 
     private fun createHistoryRenderer(): ListCellRenderer<in String> {
@@ -717,9 +757,63 @@ class SmithToolWindowPanel(private val project: Project) :
         }
     }
 
+    private fun createAgentToggle(): JToggleButton {
+        val agentIcon = IconLoader.getIcon("icons/terminal.svg", javaClass)
+        val chatIcon = IconLoader.getIcon("icons/chat.svg", javaClass)
+        return createToolbarToggle("Agent", agentIcon).apply {
+            margin = JBUI.insets(4, JBUI.scale(8), 4, JBUI.scale(10))
+            val agentLabel = "Agent"
+            val chatLabel = "Chat"
+            val baseSize = preferredSize
+            val narrowedWidth = (baseSize.width * 0.95f).toInt().coerceAtLeast(JBUI.scale(60))
+            val finalSize = Dimension(narrowedWidth, baseSize.height)
+            preferredSize = finalSize
+            minimumSize = finalSize
+            maximumSize = finalSize
+            addChangeListener {
+                if (isSelected) {
+                    icon = chatIcon
+                    text = chatLabel
+                } else {
+                    icon = agentIcon
+                    text = agentLabel
+                }
+            }
+        }
+    }
+
+    private fun createThinkMoreToggle(): JToggleButton {
+        val idleIcon = IconLoader.getIcon("icons/cloud.svg", javaClass)
+        val activeIcon = IconLoader.getIcon("icons/cloud_filled.svg", javaClass)
+        return createToolbarToggle("Think More", idleIcon).apply {
+            val paddingInsets = JBUI.insets(4, JBUI.scale(8), 4, JBUI.scale(8))
+            margin = paddingInsets
+            val baseSize = preferredSize
+            val narrowedWidth = (baseSize.width * 0.95f).toInt().coerceAtLeast(JBUI.scale(60))
+            val finalSize = Dimension(narrowedWidth, baseSize.height)
+            preferredSize = finalSize
+            minimumSize = finalSize
+            maximumSize = finalSize
+            addChangeListener {
+                icon = if (isSelected) activeIcon else idleIcon
+            }
+        }
+    }
+
+    private companion object {
+        private const val TASK_OVERVIEW_TITLE = "Task overview"
+        private const val CLIENT_PROPERTY_BUTTON_TYPE = "JButton.buttonType"
+        private const val CLIENT_PROPERTY_SIZE_VARIANT = "JComponent.sizeVariant"
+        private const val BUTTON_TYPE_TOOLBAR = "toolbar"
+        private const val SIZE_VARIANT_SMALL = "small"
+        private const val COMING_SOON_TITLE = "Coming Soon"
+    }
+
     private data class ConversationSummary(
         val id: String,
         val title: String,
         val status: String
     )
+
 }
+
