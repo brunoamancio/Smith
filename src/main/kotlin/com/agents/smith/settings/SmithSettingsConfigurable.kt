@@ -11,7 +11,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import javax.swing.SwingUtilities
 
-class SmithSettingsConfigurable(private val project: Project) : Configurable {
+class SmithSettingsConfigurable(project: Project) : Configurable {
 
     private val settingsService = SmithSettingsService.getInstance(project)
     private val viewModel = SmithViewModel()

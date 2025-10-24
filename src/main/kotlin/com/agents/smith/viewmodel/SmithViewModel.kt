@@ -23,7 +23,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.time.Instant
-import java.util.UUID
 
 class SmithViewModel(
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO
@@ -204,7 +203,12 @@ class SmithViewModel(
             }
             val responseText = response.body?.string() ?: return@executeRequest null
             val root = mapper.readTree(responseText)
-            val runNode = root["run"] ?: return@executeRequest null
+            val runNode = root["run"] ?: root
+
+            runNode["session_id"]?.asText()?.takeIf { it.isNotBlank() }?.let { sessionId ->
+                _state.update { it.copy(sessionId = sessionId) }
+            }
+
             extractAssistantReply(runNode["output"])
         }
     }
