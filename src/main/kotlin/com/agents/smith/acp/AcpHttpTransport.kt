@@ -64,9 +64,7 @@ class AcpHttpTransport(
         }
 
         client.newCall(requestBuilder.build()).execute().use { response ->
-            val rawBody = response.body?.string()
-                ?: throw AcpTransportException("ACP response body was empty for $path")
-
+            val rawBody = response.body.string()
             val root = objectMapper.readTree(rawBody)
 
             val rpcResponse = AcpJsonRpcResponse(
