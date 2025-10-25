@@ -1,17 +1,26 @@
 package com.agents.smith.viewmodel
 
+import com.agents.smith.acp.AcpHttpTransport
+import com.agents.smith.acp.AcpHttpTransportConfig
+import com.agents.smith.acp.AcpMessageRole
+import com.agents.smith.acp.AcpSessionEvent
+import com.agents.smith.acp.AcpSessionUpdate
 import com.agents.smith.state.SmithState
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.diagnostic.Logger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -28,6 +37,8 @@ class SmithViewModel(
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Disposable {
 
+    private val logger = Logger.getInstance(SmithViewModel::class.java)
+
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val httpClient = OkHttpClient()
     private val mapper = jacksonObjectMapper()
@@ -39,6 +50,12 @@ class SmithViewModel(
     private var cachedAgentName: String? = null
     private var cachedEndpoint: String = ""
     private var authToken: String = ""
+    private var sessionStreamJob: Job? = null
+    private var activeStreamSessionId: String? = null
+    private var streamingMessageIndex: Int? = null
+    private var streamingBuffer: StringBuilder = StringBuilder()
+    private var streamingHasContent: Boolean = false
+    private var streamingSignal: CompletableDeferred<Boolean>? = null
 
     fun updateConnectionStatus(connected: Boolean) {
         _state.update { it.copy(connected = connected) }
@@ -53,6 +70,9 @@ class SmithViewModel(
                 if (cachedEndpoint != normalized.acpEndpoint) {
                     cachedEndpoint = normalized.acpEndpoint
                     cachedAgentName = null
+                    sessionStreamJob?.cancel()
+                    sessionStreamJob = null
+                    activeStreamSessionId = null
                 }
             }
         }
@@ -78,27 +98,38 @@ class SmithViewModel(
             _state.update { it.copy(streaming = true) }
 
             val settings = _state.value.settings
+            val clientSessionId = _state.value.sessionId
             try {
                 val agentName = ensureAgent(settings)
                 if (agentName == null) {
                     appendSystemMessage("No agents available at ${settings.acpEndpoint}.")
                     updateConnectionStatus(false)
                 } else {
-                    val response = runSync(agentName, trimmed, settings)
-                    if (response != null) {
-                        appendMessage(
-                            SmithState.Message(
-                                role = SmithState.Role.ASSISTANT,
-                                content = response,
-                                timestamp = Instant.now()
-                            )
-                        )
-                        updateConnectionStatus(true)
-                    } else {
-                        appendSystemMessage("Agent returned an empty response.")
+                    ensureSessionStream(settings, clientSessionId)
+                    beginAssistantStream()
+
+                    val result = runSync(agentName, trimmed, settings, clientSessionId)
+                    val reply = result.reply
+                    val sessionId = result.sessionId ?: clientSessionId
+
+                    ensureSessionStream(settings, sessionId)
+
+                    val streamStarted = streamingHasContent || streamingSignal?.isCompleted == true
+
+                    if (!streamStarted) {
+                        if (!reply.isNullOrBlank()) {
+                            replaceAssistantStream(reply)
+                            resolveStreamingSignal(false)
+                            endAssistantStream()
+                        } else {
+                            removeEmptyAssistantMessage()
+                        }
                     }
+
+                    updateConnectionStatus(true)
                 }
             } catch (ex: Exception) {
+                removeEmptyAssistantMessage()
                 appendSystemMessage("Failed to contact ACP agent: ${ex.message}")
                 updateConnectionStatus(false)
             } finally {
@@ -179,11 +210,16 @@ class SmithViewModel(
         }
     }
 
-    private suspend fun runSync(agentName: String, message: String, settings: SmithState.Settings): String? {
+    private suspend fun runSync(
+        agentName: String,
+        message: String,
+        settings: SmithState.Settings,
+        clientSessionId: String
+    ): RunSyncResult {
         val payload = mapper.createObjectNode().apply {
             put("agent_name", agentName)
             put("mode", "sync")
-            put("session_id", _state.value.sessionId)
+            put("session_id", clientSessionId)
             set<JsonNode>(
                 "input",
                 mapper.createArrayNode().add(createUserMessageNode(message))
@@ -201,15 +237,20 @@ class SmithViewModel(
                 val errorBody = response.body?.string()?.take(200)
                 throw IOException("Run failed (HTTP ${response.code}): ${errorBody ?: "no body"}")
             }
-            val responseText = response.body?.string() ?: return@executeRequest null
+            val responseText = response.body?.string()
+            if (responseText.isNullOrBlank()) {
+                return@executeRequest RunSyncResult(null, null)
+            }
             val root = mapper.readTree(responseText)
             val runNode = root["run"] ?: root
 
-            runNode["session_id"]?.asText()?.takeIf { it.isNotBlank() }?.let { sessionId ->
+            val updatedSessionId = runNode["session_id"]?.asText()?.takeIf { it.isNotBlank() }
+            updatedSessionId?.let { sessionId ->
                 _state.update { it.copy(sessionId = sessionId) }
             }
 
-            extractAssistantReply(runNode["output"])
+            val reply = extractAssistantReply(runNode["output"])
+            RunSyncResult(reply, updatedSessionId)
         }
     }
 
@@ -263,6 +304,8 @@ class SmithViewModel(
     }
 
     override fun dispose() {
+        sessionStreamJob?.cancel()
+        sessionStreamJob = null
         scope.cancel("SmithViewModel disposed")
     }
 
@@ -291,5 +334,147 @@ class SmithViewModel(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+    }
+
+    private data class RunSyncResult(
+        val reply: String?,
+        val sessionId: String?
+    )
+
+    private fun ensureSessionStream(settings: SmithState.Settings, sessionId: String) {
+        if (sessionId.isBlank()) return
+        if (sessionStreamJob?.isActive == true && activeStreamSessionId == sessionId) {
+            return
+        }
+
+        sessionStreamJob?.cancel()
+        val headers = mutableMapOf<String, String>()
+        if (authToken.isNotBlank()) {
+            headers["Authorization"] = "Bearer $authToken"
+        }
+
+        val transport = AcpHttpTransport(
+            config = AcpHttpTransportConfig(
+                baseUrl = settings.acpEndpoint,
+                defaultHeaders = headers,
+                readTimeoutSeconds = settings.acpReadTimeoutSeconds.toLong()
+            )
+        )
+
+        sessionStreamJob = scope.launch {
+            try {
+                transport.sessionUpdates(sessionId).collect { update ->
+                    handleSessionUpdate(update)
+                }
+            } catch (_: Exception) {
+                // Ignore streaming errors; request flow will surface issues separately.
+            }
+        }
+        activeStreamSessionId = sessionId
+    }
+
+    private fun handleSessionUpdate(update: AcpSessionUpdate) {
+        logger.warn("Received session update: sessionId=${update.sessionId}, events=${update.events}")
+        update.events.forEach { event ->
+            when (event) {
+                is AcpSessionEvent.MessageChunk -> handleMessageChunk(event)
+                else -> {}
+            }
+        }
+    }
+
+    private fun handleMessageChunk(event: AcpSessionEvent.MessageChunk) {
+        if (event.role != AcpMessageRole.ASSISTANT) return
+        val text = event.content.text
+        if (streamingMessageIndex == null) {
+            beginAssistantStream()
+        }
+        logger.warn("Streaming chunk received (done=${event.done}): '$text'")
+        streamingBuffer.append(text)
+        if (text.isNotBlank()) {
+            streamingHasContent = true
+            streamingSignal?.let { signal ->
+                if (!signal.isCompleted) {
+                    signal.complete(true)
+                }
+            }
+        }
+        replaceAssistantStream(streamingBuffer.toString())
+        if (event.done) {
+            val hadContent = streamingHasContent
+            resolveStreamingSignal(hadContent)
+            endAssistantStream()
+            _state.update { it.copy(streaming = false) }
+        } else {
+            _state.update { it.copy(streaming = true) }
+        }
+    }
+
+    private fun beginAssistantStream() {
+        streamingSignal?.cancel()
+        streamingBuffer = StringBuilder()
+        streamingHasContent = false
+        streamingSignal = CompletableDeferred()
+        var insertIndex = 0
+        val timestamp = Instant.now()
+        _state.update { current ->
+            val newHistory = current.history + SmithState.Message(
+                role = SmithState.Role.ASSISTANT,
+                content = "",
+                timestamp = timestamp
+            )
+            insertIndex = newHistory.lastIndex
+            current.copy(history = newHistory)
+        }
+        streamingMessageIndex = insertIndex
+    }
+
+    private fun replaceAssistantStream(content: String) {
+        val index = streamingMessageIndex ?: return
+        if (content.isNotBlank()) {
+            streamingHasContent = true
+        }
+        _state.update { current ->
+            val history = current.history.toMutableList()
+            if (index < history.size) {
+                val existing = history[index]
+                history[index] = existing.copy(content = content, timestamp = Instant.now())
+                current.copy(history = history)
+            } else {
+                current
+            }
+        }
+    }
+
+    private fun endAssistantStream() {
+        streamingSignal?.cancel()
+        streamingSignal = null
+        streamingMessageIndex = null
+        streamingBuffer = StringBuilder()
+        streamingHasContent = false
+    }
+
+    private fun removeEmptyAssistantMessage() {
+        val index = streamingMessageIndex ?: return
+        _state.update { current ->
+            val history = current.history.toMutableList()
+            if (index < history.size && history[index].content.isBlank()) {
+                history.removeAt(index)
+                current.copy(history = history)
+            } else {
+                current
+            }
+        }
+        resolveStreamingSignal(false)
+        endAssistantStream()
+    }
+
+    private fun resolveStreamingSignal(result: Boolean) {
+        streamingSignal?.let { signal ->
+            if (!signal.isCompleted) {
+                signal.complete(result)
+            }
+        }
+        streamingSignal = null
     }
 }

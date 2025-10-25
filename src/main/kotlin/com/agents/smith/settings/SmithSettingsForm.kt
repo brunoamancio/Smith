@@ -36,6 +36,7 @@ class SmithSettingsForm {
     }
     private val streamCheckBox = JBCheckBox("Stream responses")
     private val maxTokensSpinner = JSpinner(SpinnerNumberModel(1024, 256, 32768, 256))
+    private val readTimeoutSpinner = JSpinner(SpinnerNumberModel(SmithSettingsService.DEFAULT_READ_TIMEOUT_SECONDS, 30, 60 * 60, 30))
     private val endpointField = JBTextField()
     private val tokenField = JBPasswordField()
     private val allowFileSystemCheck = JBCheckBox("Allow file system access (ACP fs.*)")
@@ -56,6 +57,7 @@ class SmithSettingsForm {
             .addLabeledComponent("Default model:", modelField, 1, false)
             .addComponent(streamCheckBox)
             .addLabeledComponent("Max tokens:", maxTokensSpinner, 1, false)
+            .addLabeledComponent("ACP read timeout (seconds):", readTimeoutSpinner, 1, false)
             .addSeparator()
             .addLabeledComponent("ACP endpoint URL:", endpointField, 1, false)
             .addLabeledComponent("ACP API token:", tokenField, 1, false)
@@ -76,6 +78,7 @@ class SmithSettingsForm {
         return modelField.selectedItem?.toString().orEmpty() != settings.model ||
             streamCheckBox.isSelected != settings.stream ||
             (maxTokensSpinner.value as Int) != settings.maxTokens ||
+            (readTimeoutSpinner.value as Int) != settings.acpReadTimeoutSeconds ||
             endpointField.text.trim() != settings.acpEndpoint ||
             tokenText != storedToken ||
             allowFileSystemCheck.isSelected != settings.acpCapabilities.allowFileSystem
@@ -85,6 +88,7 @@ class SmithSettingsForm {
         modelField.selectedItem = settings.model
         streamCheckBox.isSelected = settings.stream
         maxTokensSpinner.value = settings.maxTokens
+        readTimeoutSpinner.value = settings.acpReadTimeoutSeconds
         endpointField.text = settings.acpEndpoint
         tokenField.text = token
         allowFileSystemCheck.isSelected = settings.acpCapabilities.allowFileSystem
@@ -105,6 +109,7 @@ class SmithSettingsForm {
             stream = streamCheckBox.isSelected,
             maxTokens = maxTokensSpinner.value as Int,
             acpEndpoint = endpointField.text.trim(),
+            acpReadTimeoutSeconds = readTimeoutSpinner.value as Int,
             acpTokenAlias = if (tokenText.isNotBlank()) current.acpTokenAlias ?: SmithSettingsService.DEFAULT_TOKEN_ALIAS else null,
             acpCapabilities = current.acpCapabilities.copy(
                 allowFileSystem = allowFileSystemCheck.isSelected

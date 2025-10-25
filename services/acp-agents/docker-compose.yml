@@ -1,4 +1,5 @@
 services:
+
   echo-agent:
     build:
       context: ./echo
@@ -9,3 +10,14 @@ services:
     environment:
       - ACP_HOST=0.0.0.0
       - ACP_PORT=8080
+
+  codex-agent:
+    build:
+      context: ./codex
+    image: smith-codex-agent
+    container_name: smith-codex-agent
+    ports:
+      - "8002:8080"
+    environment:
+      - CODEX_ACP_VERSION=0.3.9
+      - LOG_LEVEL=DEBUG

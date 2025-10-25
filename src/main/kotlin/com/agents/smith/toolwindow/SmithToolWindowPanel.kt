@@ -46,6 +46,7 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.AbstractAction
 import javax.swing.DefaultListModel
+import javax.swing.DefaultListSelectionModel
 import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JComponent
@@ -272,10 +273,23 @@ class SmithToolWindowPanel(private val project: Project) :
         chatList.cellRenderer = SmithMessageRenderer()
         chatList.visibleRowCount = 10
         chatList.background = promptBackground
-        chatList.selectionBackground = JBColor(0x2F3136, 0x2F3136)
+        chatList.selectionBackground = promptBackground
+        chatList.selectionForeground = JBColor(0xE5E8EF, 0xE5E8EF)
+        chatList.isFocusable = false
+        chatList.selectionModel = object : DefaultListSelectionModel() {
+            override fun setSelectionInterval(index0: Int, index1: Int) {}
+            override fun addSelectionInterval(index0: Int, index1: Int) {}
+        }
 
         conversationList.selectionMode = ListSelectionModel.SINGLE_SELECTION
         conversationList.background = promptBackground
+        conversationList.selectionBackground = promptBackground
+        conversationList.selectionForeground = JBColor(0xE5E8EF, 0xE5E8EF)
+        conversationList.isFocusable = false
+        conversationList.selectionModel = object : DefaultListSelectionModel() {
+            override fun setSelectionInterval(index0: Int, index1: Int) {}
+            override fun addSelectionInterval(index0: Int, index1: Int) {}
+        }
         configureConversationListNavigation()
     }
 
@@ -684,19 +698,22 @@ class SmithToolWindowPanel(private val project: Project) :
             val safeValue = value ?: return JBLabel()
             val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
                 border = JBEmptyBorder(8, 8, 8, 8)
-                isOpaque = true
-                background = if (isSelected) list.selectionBackground else list.background
+                isOpaque = false
+                background = list.background
             }
 
             val roleLabel = JBLabel(
                 safeValue.role.name.lowercase().replaceFirstChar { it.uppercase() }
             ).apply {
                 border = JBEmptyBorder(0, 0, 4, 0)
+                foreground = JBColor(0xB0B5C0, 0xB0B5C0)
             }
 
             val contentLabel = JBLabel(
                 "<html>${StringUtil.escapeXmlEntities(safeValue.content).replace("\n", "<br>")}</html>"
-            )
+            ).apply {
+                foreground = JBColor(0xE5E8EF, 0xE5E8EF)
+            }
 
             panel.add(roleLabel, BorderLayout.NORTH)
             panel.add(contentLabel, BorderLayout.CENTER)

@@ -33,6 +33,7 @@ data class SmithState(
         val maxTokens: Int = 1024,
         val acpEndpoint: String = "",
         val acpTokenAlias: String? = null,
+        val acpReadTimeoutSeconds: Int = 5 * 60,
         val acpCapabilities: AcpCapabilities = AcpCapabilities()
     )
 

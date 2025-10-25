@@ -22,6 +22,7 @@ import okhttp3.Response
 import java.io.BufferedReader
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlin.sequences.asSequence
 
 private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -29,17 +30,22 @@ private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 data class AcpHttpTransportConfig(
     val baseUrl: String,
     val defaultHeaders: Map<String, String> = emptyMap(),
-    val sessionUpdatesPathTemplate: String = "session/%s/updates"
+    val sessionUpdatesPathTemplate: String = "session/%s/updates",
+    val readTimeoutSeconds: Long = TimeUnit.MINUTES.toSeconds(5)
 )
 
 class AcpHttpTransport(
     private val config: AcpHttpTransportConfig,
-    private val client: OkHttpClient = OkHttpClient(),
+    private val client: OkHttpClient = defaultClient(config.readTimeoutSeconds),
     private val objectMapper: com.fasterxml.jackson.databind.ObjectMapper = jacksonObjectMapper(),
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : AcpTransport {
 
     private val baseUrl: HttpUrl = config.baseUrl.trimEnd('/').toHttpUrl()
+    private val streamingClient: OkHttpClient = client.newBuilder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .callTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
 
     override suspend fun <Params : Any> post(
         path: String,
@@ -112,7 +118,7 @@ class AcpHttpTransport(
             }
             .build()
 
-        val call = client.newCall(request)
+        val call = streamingClient.newCall(request)
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 close(e)
@@ -152,16 +158,18 @@ class AcpHttpTransport(
         val sessionId = node.readText("sessionId")
             ?: throw AcpTransportException("Missing sessionId in update payload")
         val promptId = node.readText("promptId")
-        val events = node.readNode("events")
-            .arrayElements()
-            .map { parseSessionEvent(it) }
-            .toList()
 
-        return AcpSessionUpdate(
-            sessionId = sessionId,
-            promptId = promptId,
-            events = events
-        )
+        val eventsNode = node.readNode("events")
+        val events = when {
+            eventsNode != null -> eventsNode
+                .arrayElements()
+                .map { parseSessionEvent(it) }
+                .toList()
+            node.readNode("update") != null -> listOfNotNull(parseSessionUpdateNode(node.readNode("update")))
+            else -> emptyList()
+        }
+
+        return AcpSessionUpdate(sessionId = sessionId, promptId = promptId, events = events)
     }
 
     private fun parseSessionEvent(node: JsonNode): AcpSessionEvent {
@@ -174,6 +182,52 @@ class AcpHttpTransport(
                 type = node.readText("type"),
                 raw = convertToMap(node)
             )
+    }
+
+    private fun parseSessionUpdateNode(node: JsonNode?): AcpSessionEvent? {
+        if (node == null) return null
+        return when (node.readText("sessionUpdate")) {
+            "agent_message_chunk", "assistant_message_chunk" -> {
+                createMessageChunk(node, AcpMessageRole.ASSISTANT)
+            }
+            "user_message_chunk" -> createMessageChunk(node, AcpMessageRole.USER)
+            "agent_thought_chunk" -> createMessageChunk(node, AcpMessageRole.THOUGHT)
+            else -> {
+                AcpSessionEvent.Unknown(
+                    type = node.readText("sessionUpdate"),
+                    raw = convertToMap(node)
+                )
+            }
+        }
+    }
+
+    private fun createMessageChunk(node: JsonNode, role: AcpMessageRole): AcpSessionEvent.MessageChunk? {
+        val contentNode = node.readNode("content") ?: node.readNode("delta")
+        val text = extractText(contentNode) ?: return null
+        val done = node.readBoolean("done") ?: node.readBoolean("final") ?: false
+        return AcpSessionEvent.MessageChunk(
+            role = role,
+            content = AcpMessagePart.Text(text),
+            done = done
+        )
+    }
+
+    private fun extractText(node: JsonNode?): String? {
+        if (node == null || node.isNull) return null
+        if (node.isTextual) return node.asText()
+        node.readText("text")?.let { return it }
+        node.readNode("delta")?.let { delta ->
+            extractText(delta)?.let { return it }
+        }
+        if (node.isArray) {
+            node.arrayElements().forEach { child ->
+                extractText(child)?.let { return it }
+            }
+        }
+        node.readNode("content")?.let { child ->
+            extractText(child)?.let { return it }
+        }
+        return null
     }
 
     private fun parseMessageEvent(node: JsonNode): AcpSessionEvent? {
@@ -253,6 +307,15 @@ class AcpHttpTransport(
             onData(dataBuilder.toString().trimEnd())
         }
     }
+}
+
+private fun defaultClient(readTimeoutSeconds: Long = TimeUnit.MINUTES.toSeconds(5)): OkHttpClient {
+    val effectiveReadTimeout = readTimeoutSeconds.coerceAtLeast(1)
+    return OkHttpClient.Builder()
+        .callTimeout(effectiveReadTimeout, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(effectiveReadTimeout, TimeUnit.SECONDS)
+        .build()
 }
 
 class AcpTransportException(message: String, cause: Throwable? = null) : Exception(message, cause)

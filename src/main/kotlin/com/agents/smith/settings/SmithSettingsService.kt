@@ -38,6 +38,7 @@ class SmithSettingsService : PersistentStateComponent<SmithSettingsService.State
             maxTokens = state.maxTokens,
             acpEndpoint = state.acpEndpoint,
             acpTokenAlias = tokenAliasOrNull(),
+            acpReadTimeoutSeconds = state.acpReadTimeoutSeconds.takeIf { it > 0 } ?: DEFAULT_READ_TIMEOUT_SECONDS,
             acpCapabilities = SmithState.AcpCapabilities(
                 allowFileSystem = state.allowFileSystem,
                 allowTerminal = runtimeAllowTerminal,
@@ -52,6 +53,7 @@ class SmithSettingsService : PersistentStateComponent<SmithSettingsService.State
         state.maxTokens = settings.maxTokens
         state.acpEndpoint = settings.acpEndpoint
         state.allowFileSystem = settings.acpCapabilities.allowFileSystem
+        state.acpReadTimeoutSeconds = settings.acpReadTimeoutSeconds.coerceAtLeast(1)
 
         val alias = settings.acpTokenAlias ?: DEFAULT_TOKEN_ALIAS
         if (token.isNullOrBlank()) {
@@ -109,11 +111,13 @@ class SmithSettingsService : PersistentStateComponent<SmithSettingsService.State
         var acpEndpoint: String = ""
         var acpTokenAlias: String? = null
         var allowFileSystem: Boolean = false
+        var acpReadTimeoutSeconds: Int = DEFAULT_READ_TIMEOUT_SECONDS
 
     }
 
     companion object {
         const val DEFAULT_TOKEN_ALIAS: String = "default"
+        const val DEFAULT_READ_TIMEOUT_SECONDS: Int = 5 * 60
 
         val TOPIC: Topic<SmithSettingsListener> = Topic.create(
             "SmithSettingsChanged",
